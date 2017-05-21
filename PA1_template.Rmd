@@ -10,7 +10,7 @@ output:
 The supplied data is read and stored in a data frame, data.  The 'lubridate' package is utilized for
 transforming the date column factors to the 'date' class.
 
-```{r preProcessing, echo = FALSE, results = "hide"}
+```{r preProcessing}
 library(lubridate)
 data <- read.csv("activity.csv")
 data$date <- ymd(data$date)
@@ -41,23 +41,135 @@ stepDays <- unique(data$date)
 dailyTotals <- data.frame(date = stepDays, total.steps = sumSteps)
 qplot(total.steps, data = dailyTotals, main = "Daily Step Distribution")
 ```
+
 It can be seen that approximately 10,000 steps is the most frequent daily outcome, when the NA (seen at zero) are ignored.  The distribution appears to be somewhat normal.
 
 ## What is the average daily activity pattern?
-We want to observe the daily activity pattern across all days by comparing the amount of steps
-in a five minute interval to the average number of steps taken, averaged across all the days data was
-taken.  
+We want to observe the daily activity pattern across all days by plotting the average number of steps in each five minute interval, averaged across all the days data was taken.  The overall interval average is plotted as well for comparison purposes. 
+
 ```{r activityPattern}
-intervalMean <- mean(tapply(data$steps, data$date, mean, na.rm = TRUE), na.rm = TRUE)
-qplot(interval, steps, data = data, geom = "line", main = "Number of Steps per Interval") + geom_hline(yintercept = intervalMean, col = "red")
+overallMean <- mean(tapply(data$steps, data$date, mean, na.rm = TRUE), na.rm = TRUE)
 
+# data that will go in new dataframe
+intervalMean <- tapply(data$steps, data$interval, mean, na.rm = TRUE)
+intervals <- unique(data$interval)
 
+## dataframe containing the mean steps for each interval across all days
+intervalMeans <- data.frame(interval = intervals, interval.step.mean = intervalMean)
+
+qplot(interval, interval.step.mean, data = intervalMeans, geom = "line", main = "Mean Number of Steps per Interval") + geom_hline(yintercept = overallMean, col = "red")
 ```
+
+We find the maximum number of steps taken in an interval and its corresponding interval using the following code.
+
+```{r max_steps}
+maxSteps <- max(data$steps, na.rm = TRUE)
+data[which(data$steps == maxSteps),]
+```
+The maximum number of steps in an interval was observed to be `r maxSteps` steps.
 
 ## Imputing missing values
-```{r imputing}
+In order to impute the NAs in the original data set, we need to understand the number of NAs that are present and where they occur.  To calculate the number of NAs, we can use a simple five number summary of the steps variable.
 
+```{r numNAs}
+## returns the number of NAs
+summary(data$steps)[7]
+## calculate the percentage of the data set that NAs make up.
+percNA <- (summary(data$steps)[7]/length(data$steps))*100
 
 ```
 
+We see there are 2304 NAs in the step column of the original dataset, or `r percNA`% of the total data set. 
+
+The imputing scheme chosen involves imputing observations that are NA with the corresponding 5-minute interval means.   
+```{r imputing}
+# construct a dataframe of the same length that repeats the interval means
+new <- rbind(intervalMeans, intervalMeans)
+for(i in 1:59) {
+    new <- rbind(new, intervalMeans)
+} 
+
+# perform a column bind of the interval means with the original data and set the colnames
+dataNew <- cbind(data, new$interval.step.mean)
+names(dataNew) <- c("steps", "date", "interval", "interval.step.mean")
+
+# impute the interval observations that are NAs with the specific interval mean, averaged over all days
+for(j in 1:length(dataNew$steps)) {
+    if(is.na(dataNew[j,1])) {
+        dataNew[j,1] <- dataNew[j,4]
+    }
+}
+```
+
+The histogram of the new dataframe is plotted below using the ggplot2 plotting package.
+
+```{r}
+sumNewSteps <- tapply(dataNew$steps, dataNew$date, sum, na.rm = TRUE)
+stepNewDays <- unique(dataNew$date)
+dailyNewTotals <- data.frame(date = stepNewDays, total.steps = sumNewSteps)
+qplot(total.steps, data = dailyNewTotals, main = "Daily Step Distribution")
+```
+
+Two major differences are noticed when comparing the new histogram with the original histogram (with NAs ignored).
+
+1. The frequency of daily totals between 0 and approximately 79 steps has dropped drastically.
+2. The bin with the highest frequency, about 10,000 steps per day, of total daily steps has increased to approximately 12
+
+The mean and median total daily steps are recalculated with the following code:
+
+```{r newMeanandMedian}
+meanNewSteps <- mean(tapply(dataNew$steps, dataNew$date, sum))
+meanNewSteps
+medianNewSteps <- median(tapply(dataNew$steps, dataNew$date, sum))
+medianNewSteps
+```
+
+We see that these values are slightly different than the original estimates that ignored all NAs.  
+
 ## Are there differences in activity patterns between weekdays and weekends?
+The construction of the dataframe containing the average number of steps in each interval over all days with weekdays and weekends separated is done using the code below.  We obtain a dataframe with dimensions equal to 576 x 3.   
+
+```{r dataFrameConstruct}
+wdays <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
+
+dataNew$dayType <- factor((weekdays(dataNew$date)) %in% wdays, levels = c(TRUE, FALSE), labels = c("weekday", "weekend"))
+
+## Subsetting of the data for the dates in question
+weekendData <- subset(dataNew, dayType == "weekend")
+weekdayData <- subset(dataNew, dayType == "weekday")
+
+# data that will go in new weekend dataframe that does not have NAs
+intervalEndMean <- tapply(weekendData$steps, weekendData$interval, mean)
+intervalsEnd <- unique(weekendData$interval)
+
+## dataframe containing the mean steps for each interval across weekends (no NAs)
+intervalEndMeans <- data.frame(interval = intervalsEnd, interval.step.mean = intervalEndMean)
+intervalEndMeans$type <- as.factor(rep("weekend", 288))
+
+# data that will go in new weekday dataframe that does not have NAs
+intervalDayMean <- tapply(weekdayData$steps, weekdayData$interval, mean)
+intervalsDay <- unique(weekdayData$interval)
+
+## dataframe containing the mean steps for each interval across weekdays (no NAs)
+intervalDayMeans <- data.frame(interval = intervalsDay, interval.step.mean = intervalDayMean)
+intervalDayMeans$type <- as.factor(rep("weekday", 288))
+
+intervalTotalMeans <- rbind(intervalDayMeans, intervalEndMeans)
+
+head(intervalTotalMeans)
+```
+
+The formatting code for this portion of the analysis is simple using ggplot2.
+
+```{r plotting}
+# Construct ggplot2 object
+g <- ggplot(intervalTotalMeans, aes(interval, interval.step.mean))
+
+# plot the time series using ggplot2
+g + geom_line() + facet_wrap(~type) + labs(title = "Weekend vs. Weekday Avg. Num. of Steps Over All Days For Each Interval")
+```
+
+When we compare the weekend data to the weekday data, there are noticable differences.
+
+- While in both cases, steps begin to occur around the same interval (~ 500), the rate of increase in number of steps taken is much greater on the weekday where the rate of increase is gradual on the weekend.
+- The peak value of average number of steps is nearly double on the weekday when compared to the weekend.
